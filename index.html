@@ -439,6 +439,10 @@
   /* Cards in a row are one height and the buttons sit on the bottom edge, so a longer title
      or label never knocks a row out of line (Jhen 11/11/2026). */
   .gp-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;align-items:stretch;padding:12px 14px 16px}
+  .gaa{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin:8px 14px 0}
+  .gpsum .gaa-btn{margin:-3px 0}
+  .gaa .apanel{flex-basis:100%;margin:0}
+  .gaa .apanel .btn{margin-top:8px}
   @media screen and (max-width:980px){ .gp-grid{grid-template-columns:repeat(2,minmax(0,1fr))} }
   @media screen and (max-width:640px){ .gp-grid{grid-template-columns:minmax(0,1fr);padding:10px 0 14px} }
   .gp-card,.gp-in{min-width:0}
@@ -2247,6 +2251,27 @@ function assignPanel(r, staff){
           ? 'This client has no hub logins yet, so there is nobody to pick.'
           : 'Nobody else on your team has a login yet. Ask us to add them.')+'</p>');
   return '<div class="panel apanel" id="assign-'+id+'" hidden>' + team + reviewer + '</div>';
+}
+
+// "Assign all GBP posts" (hub.json "client_assign", Jhen 25/11/2026): one person from the client's own team on
+// every GBP post this month that is not approved and has nobody yet, in one press and ONE email
+// (ch_client_assign_month). Both views; Client view preview stays read-only like every other save.
+// part 'btn' sits in the GBP summary row (Jhen: in line with "4 waiting on you · 8 approved"), part 'panel' under it.
+function gbpAssignAll(sr, part){
+  if (!CFG.clientAssign || !sr.length || sr.every(r => r.approved)) return '';
+  const mk = esc(sr[0].month_key), left = sr.filter(r => !r.approved && !r.client_reviewer).length;
+  if (part === 'btn') return left
+    ? '<span><b>' + left + '</b> not assigned yet</span><button class="btn sm gaa-btn" type="button" data-assignall="' + mk + '">Assign all GBP posts</button>'
+    : '<span><b>&#10003;</b> all assigned</span>';
+  if (!left) return '';
+  return '<div class="gaa">'
+    + '<div class="panel apanel" id="gaa-' + mk + '" hidden><label>Who is reviewing these?</label>'
+    + (CLIENTPEOPLE.length
+        ? '<select class="asel" data-assignallsel="' + mk + '"><option value="">Pick someone</option>'
+          + CLIENTPEOPLE.map(p => '<option value="' + esc(p.user_id) + '">' + esc(p.full_name) + '</option>').join('') + '</select>'
+          + '<button class="btn sm" type="button" data-assignallgo="' + mk + '">Assign ' + left + (left === 1 ? ' post' : ' posts') + '</button>'
+        : '<p class="ahint">Nobody on your team has a login yet. Ask us to add them.</p>')
+    + '</div></div>';
 }
 
 const statusOpts = id => INTERNAL_STATUS.map(([v,l]) =>
@@ -6298,6 +6323,7 @@ function monthBriefMarkup(t){
           + '<span class="tc">'+sr.length+' '+(sr.length===1?'item':'items')+'</span></div>';
     if (CFG.picCards && PCSTREAMS.has(stream)) { body += '<div class="gp-grid">'; for (const r of pcSort(sr)) body += itemCard(r, staff); body += '</div>'; continue; }
     if (stream !== 'gbp') { for (const r of sr) body += itemCard(r, staff); continue; }
+    if (!CFG.gbpCards) body += '<div class="gpsum">' + gbpAssignAll(sr, 'btn') + '</div>' + gbpAssignAll(sr, 'panel');
     // GBP: 3 posts a week, grouped by week so the client can approve a week in one click.
     // The pill reads wkDone, never !open. An item that is still 'started' is not approvable yet
     // and is also not approved; treating open===0 as approved told clients 13 unapproved posts
@@ -6308,7 +6334,7 @@ function monthBriefMarkup(t){
       const gWait = sr.filter(r => !r.approved && !r.not_approved && statusKey(r) === 'due').length;
       body += '<div class="gpsum"><span><b>' + gWait + '</b> waiting on you</span><span><b>' + gOk + '</b> approved</span>'
             + (gChg ? '<span><b>' + gChg + '</b> with changes requested</span>' : '')
-            + '<span><b>' + sr.length + '</b> posts, 3 a week</span></div>';
+            + '<span><b>' + sr.length + '</b> posts, 3 a week</span>' + gbpAssignAll(sr, 'btn') + '</div>' + gbpAssignAll(sr, 'panel');
     }
     weeks.forEach((wk, i) => {
       const wr = sr.filter(r => weekKey(r.publish_date) === wk);
@@ -6513,7 +6539,11 @@ function gpCard(r, staff){
               + '<button type="button" class="btn gp-no" data-gprej="' + id + '"' + (ready ? '' : ' disabled') + '>'
                 + (r.not_approved ? 'Update feedback' : 'Not approved') + '</button>')
         + '<button type="button" class="btn ghost" data-note="' + id + '">' + (r.client_notes ? 'Edit comment' : 'Comment') + '</button>'
+        // The client's own Assign on GBP posts too (hub.json "client_assign", Jhen 25/11/2026).
+        + (!staff && CFG.clientAssign && !(PCGPIN && r.post_body) ? '<button type="button" class="btn ghost" data-assignbtn="' + id + '">Assign'
+            + (assignDot(r, false) ? '<span class="notedot"></span>' : '') + '</button>' : '')
       + '</div>'
+      + (!staff && CFG.clientAssign ? assignPanel(r, false) : '')
       + '<input type="checkbox" class="hide" data-reject="' + id + '"' + (r.not_approved ? ' checked' : '') + ' tabindex="-1" aria-hidden="true">'
       // Saved feedback already shows in the red box above, so the form stays folded until Update feedback.
       + rejBox(r).replace('rejbox saved"', 'rejbox saved hide"')
@@ -6855,14 +6885,16 @@ function pcSort(list){ return list.slice().sort(pcOrder); }
 // the client's project manager. Approved blogs, pages and GBP posts: Rishikesh, Neha and Daivesh join them,
 // so the delivery team can upload. Approved LinkedIn: Janice (she uploads), Jose, Jhen, plus Armand on his
 // clients. The project manager comes from the client record (Hannah's clients are Armand's, the rest Janice's).
+// Daivesh joins only on Local SEO clients (tt_clients.local_seo via ch_hub_local_seo, Jhen 25/11/2026); the
+// Slack tags read the same rule in the database (ch_team_people).
 // Round circles, the name on hover. The client's own reviewer (hub.json "client_assign") keeps its circle,
 // which still opens the Assign pop-up. The old single assignee in ch_items_internal is left as it is.
-let PCPM = null, PCPMASK = false;
+let PCPM = null, PCPMASK = false, PCLOCAL = false;
 function pcTeam(r){
   const pm = PCPM || 'janice', li = r.deliverable === 'linkedin_article';
   const t = !r.approved ? ['jose', 'jhen', pm]
           : li ? ['janice', 'jose', 'jhen'].concat(pm === 'armand' ? ['armand'] : [])
-          : ['rishikesh', 'neha', 'daivesh', 'jose', 'jhen', pm];
+          : ['rishikesh', 'neha'].concat(PCLOCAL ? ['daivesh'] : [], ['jose', 'jhen', pm]);
   return [...new Set(t)];
 }
 const PCAVC = { jose: '#1d4f91', jhen: '#7c3aed', janice: '#0e7490', armand: '#b45309', rishikesh: '#15803d', neha: '#be185d', daivesh: '#4338ca' };
@@ -6888,6 +6920,9 @@ function pcAssigned(r){
     sb.rpc('ch_hub_pm', { p_slug: CFG.slug }).then(({ data }) => {
       if (typeof data !== 'string' || !data) return; PCPM = data; pcTeamRepaint();
     });
+    sb.rpc('ch_hub_local_seo', { p_slug: CFG.slug }).then(({ data }) => {
+      if (data !== true) return; PCLOCAL = true; pcTeamRepaint();
+    });
     sb.from('ch_team_avatars').select('person,full_name,avatar_url').then(({ data }) => {
       if (!Array.isArray(data) || !data.length) return;
       PCAV = {}; data.forEach(a => { if (a && a.person) PCAV[a.person] = a; }); pcTeamRepaint();
@@ -6896,7 +6931,7 @@ function pcAssigned(r){
   const rv = r.client_reviewer ? ((CLIENTPEOPLE.find(p => p.user_id === r.client_reviewer) || {}).full_name || '') : '';
   return '<div class="pc-row pc-asg"><span>Assigned to</span><span class="pc-avs" data-pcteam="' + id + '">' + pcTeamHtml(r) + '</span>'
     + (rv ? '<button type="button" class="pc-avb cl" data-assignbtn="' + id + '" data-tip="Client reviewer: ' + esc(rv) + '" aria-label="Client reviewer ' + esc(rv) + '">' + pcInitials(rv) + '</button>'
-       : CFG.clientAssign && r.stream !== 'gbp' ? '<button type="button" class="pc-avb none" data-assignbtn="' + id + '" data-tip="Add a client reviewer" aria-label="Add a client reviewer">+</button>' : '')
+       : CFG.clientAssign ? '<button type="button" class="pc-avb none" data-assignbtn="' + id + '" data-tip="Add a client reviewer" aria-label="Add a client reviewer">+</button>' : '')
     + '</div>';
 }
 // Pop-ups for Target URL & meta, Assign, Brief & links and Notes on picture cards (Jhen 20/11/2026): the
@@ -6969,7 +7004,10 @@ function pcGpCard(r, staff){
     const tags = (r.hashtags || []).map(t => '#' + String(t).replace(/^#+/, '')).join(' ');
     const cap = staff && r.post_body ? r.post_body + (tags ? '\n\n' + tags : '') : '';
     h = h.replace(/(<div class="pc-seerow"><button type="button" class="gp-see[^"]*"[^>]*>[\s\S]*?<\/button>)/, m => m
-      + (cap ? '<button class="copybtn gctac" type="button" data-copy="' + esc(cap) + '">Copy caption</button>' : '') + '</div>');
+      + (cap ? '<button class="copybtn gctac" type="button" data-copy="' + esc(cap) + '">Copy caption</button>' : '')
+      // The client's Assign sits beside See the post (Jhen 25/11/2026).
+      + (!staff && CFG.clientAssign ? '<button class="copybtn gctac" type="button" data-assignbtn="' + esc(r.id) + '">Assign'
+          + (assignDot(r, false) ? '<span class="notedot"></span>' : '') + '</button>' : '') + '</div>');
   }
   if (r.client_notes) {
     const nb = pcBubble(staff ? who : 'You', 'Comment', 'cl', '', r.client_notes);
@@ -7565,6 +7603,25 @@ function wireMonthBrief(el, t){
     });
     badge('Week approved','ok');
     refreshMonth(t);
+  }));
+
+  // Assign all GBP posts (gbpAssignAll). The database step does the whole month and sends one email.
+  el.querySelectorAll('[data-assignall]').forEach(b => b.addEventListener('click', () => {
+    const p = $('gaa-' + b.dataset.assignall); if (p) p.hidden = !p.hidden;
+  }));
+  el.querySelectorAll('[data-assignallgo]').forEach(b => b.addEventListener('click', async () => {
+    const mk = b.dataset.assignallgo, sel = el.querySelector('[data-assignallsel="' + mk + '"]');
+    const uid = sel && sel.value;
+    if (!uid) { badge('Pick someone first.', 'err'); return; }
+    b.disabled = true; badge('Saving…');
+    const { data, error } = await sb.rpc('ch_client_assign_month', { p_slug: CFG.slug, p_month: mk, p_user: uid });
+    b.disabled = false;
+    if (error) { badge('Could not assign those posts.', 'err'); return; }
+    ITEMS.filter(r => r.month_key === mk && r.stream === 'gbp' && !r.approved && !r.client_reviewer)
+      .forEach(r => { r.client_reviewer = uid; });
+    const nm = (CLIENTPEOPLE.find(p => p.user_id === uid) || {}).full_name || 'them', n = Number(data) || 0;
+    refreshMonth(t);
+    badge(n ? 'Assigned ' + n + (n === 1 ? ' post' : ' posts') + ' to ' + nm : 'Nothing left to assign', 'ok');
   }));
 
   // Approve the whole month. Same staged logic as the week button, never unticks.
